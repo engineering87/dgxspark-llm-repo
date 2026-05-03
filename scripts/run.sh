@@ -14,7 +14,7 @@ set -euo pipefail
 LLAMA_DIR="${LLAMA_DIR:-/opt/llama.cpp}"
 BIN="$LLAMA_DIR/build/bin/llama-server"
 
-MODEL_PATH="${MODEL_PATH:-/models/gemma-4-31b-it/gemma-4-31b-it-nvfp4.gguf}"
+MODEL_PATH="${MODEL_PATH:-/models/gemma-4-31B-it-NVFP4-turbo/gemma-4-31B-it-NVFP4-turbo-NVFP4.gguf}"
 HOST="${HOST:-0.0.0.0}"
 PORT="${PORT:-8080}"
 CTX_SIZE="${CTX_SIZE:-16384}"

@@ -16,6 +16,7 @@
 [![Model Format](https://img.shields.io/badge/Model-GGUF-orange?style=flat-square)](https://github.com/ggml-org/ggml/blob/master/docs/gguf.md)
 [![OpenAI API](https://img.shields.io/badge/API-OpenAI--compatible-412991?style=flat-square&logo=openai&logoColor=white)](https://platform.openai.com/docs/api-reference)
 [![systemd](https://img.shields.io/badge/Service-systemd-FCC624?style=flat-square&logo=linux&logoColor=black)](https://systemd.io/)
+[![Benchmarked](https://img.shields.io/badge/Benchmarked-Gemma_4_31B_NVFP4-success?style=flat-square)](bench-results.md)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](LICENSE)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=flat-square)](CONTRIBUTING.md)
 [![Maintained](https://img.shields.io/badge/Maintained-yes-success.svg?style=flat-square)](https://github.com/engineering87/dgxspark-llm-repo/commits/main)
@@ -42,13 +43,14 @@
 9. [Run as a systemd service](#-run-as-a-systemd-service)
 10. [Remote access](#-remote-access)
 11. [Performance and tuning](#-performance-and-tuning)
-12. [Monitoring](#-monitoring)
-13. [Troubleshooting](#-troubleshooting)
-14. [Security considerations](#-security-considerations)
-15. [Project structure](#-project-structure)
-16. [Roadmap](#-roadmap)
-17. [Contributing](#-contributing)
-18. [License](#-license)
+12. [Measured benchmarks](#-measured-benchmarks)
+13. [Monitoring](#-monitoring)
+14. [Troubleshooting](#-troubleshooting)
+15. [Security considerations](#-security-considerations)
+16. [Project structure](#-project-structure)
+17. [Roadmap](#-roadmap)
+18. [Contributing](#-contributing)
+19. [License](#-license)
 
 ---
 
@@ -471,17 +473,17 @@ A minimal nginx snippet is provided in [`docs/nginx-reverse-proxy.conf.example`]
 
 ## 📊 Performance and tuning
 
-Approximate throughput on GB10 with full GPU offload (single client, batch 1):
+Throughput on GB10 with full GPU offload, single client, batch 1. The Gemma row marked **★** is measured on the reference machine; the other rows are indicative figures from public sources (see [Measured benchmarks](#-measured-benchmarks) for the verified data and reproduction instructions).
 
-| Model | Quant | Ctx | Prefill (t/s) | Decode (t/s) |
+| Model | Quant | Prefill (pp512, t/s) | Decode (tg128, t/s) | Source |
 |---|---|---|---|---|
-| Gemma 4 31B IT | NVFP4 | 16k | ~600 | ~28 |
-| Llama 3.3 70B | Q4_K_M | 8k | ~250 | ~9 |
-| Qwen3 32B Dense | F16 | 8k | ~220 | ~10.7 |
-| Qwen3 30B-A3B (MoE) | F16 | 8k | ~340 | ~89 |
-| Mistral Small 3 24B | Q5_K_M | 8k | ~480 | ~22 |
+| **Gemma 4 31B IT** | **NVFP4-turbo** | **542.9 ± 2.3** | **11.56 ± 0.00** | **★ measured** |
+| Llama 3.3 70B | Q4_K_M | ~250 | ~7 | estimated |
+| Qwen3 32B Dense | F16 | ~220 | ~10.7 | public bench |
+| Qwen3 30B-A3B (MoE) | F16 | ~340 | ~89 | public bench |
+| Mistral Small 3 24B | Q5_K_M | ~480 | ~22 | estimated |
 
-Numbers are indicative and depend on prompt length, batch settings, and concurrency. MoE models dramatically outperform dense models of equivalent size on GB10 because the limiting factor on dense decoding is memory bandwidth (~273 GB/s), while MoE activates only a fraction of the parameters per token.
+MoE models dramatically outperform dense models of equivalent parameter count on GB10. The limit on dense decoding is memory bandwidth (~273 GB/s on LPDDR5x), and an MoE layer activates only a fraction of the weights per token, so the effective bandwidth requirement collapses. The Gemma 4 31B NVFP4 result above sits at roughly 77% of the theoretical bandwidth ceiling for that model size (273 / 17.97 ≈ 15.2 t/s), which is the expected efficiency for a well-tuned dense kernel on this platform.
 
 ### Tuning levers
 
@@ -489,6 +491,96 @@ Numbers are indicative and depend on prompt length, batch settings, and concurre
 - **Context size.** KV cache scales linearly with `--ctx-size` and quadratically with concurrent slots. A 131k context with `--parallel 4` can easily consume more memory than the model itself.
 - **Flash Attention.** Always on for Blackwell. There is no scenario where disabling it helps.
 - **Prefill batch.** Larger `--batch-size` accelerates long-prompt prefill at the cost of memory. 2048 is a good default on GB10.
+
+---
+
+## 🧪 Measured benchmarks
+
+The numbers in this section are produced on the reference DGX Spark machine using `llama-bench` (the official benchmarking tool shipped with `llama.cpp`). They are reproducible: the exact command is provided so you can verify on your own hardware.
+
+### Reference run: Gemma 4 31B IT NVFP4-turbo
+
+```bash
+./build/bin/llama-bench \
+    -m /models/gemma-4-31B-it-NVFP4-turbo/gemma-4-31B-it-NVFP4-turbo-NVFP4.gguf \
+    -ngl 100
+```
+
+#### Hardware
+
+| Field | Value |
+|---|---|
+| GPU | NVIDIA GB10 |
+| Compute capability | 12.1 (Blackwell) |
+| Visible VRAM | 124,610 MiB (~121.7 GiB unified) |
+| VMM | enabled |
+| `llama.cpp` build | `550d684bd (8902)` |
+
+#### Model
+
+| Field | Value |
+|---|---|
+| Architecture | Gemma 4 31B |
+| Quantization | NVFP4-turbo |
+| File size | 17.97 GiB |
+| Parameters | 30.70 B |
+| GPU layers | 100 (full offload) |
+
+#### Results
+
+| Test | Tokens | Throughput (t/s) | Notes |
+|---|---|---|---|
+| `pp512` | 512 prompt tokens | **542.92 ± 2.27** | Prefill / prompt processing |
+| `tg128` | 128 generated tokens | **11.56 ± 0.00** | Decode / token generation |
+
+#### What these metrics mean
+
+- **`pp512` (prompt processing).** Speed at which the model ingests an existing prompt of 512 tokens. This is the prefill phase. Prefill is **compute-bound**: it benefits from the FP4 tensor cores on Blackwell. The 542 t/s figure means a 16,384-token prompt completes prefill in roughly 30 seconds.
+- **`tg128` (token generation).** Speed at which the model emits new tokens autoregressively. This is the decode phase, and on dense models it is **memory-bandwidth-bound**: every new token requires reading the full weight matrix once. The theoretical ceiling for an 18 GiB model on 273 GB/s LPDDR5x is ~15.2 t/s. The measured 11.56 t/s sits at ~76% of that ceiling, which is the expected efficiency for well-optimized CUDA kernels on Blackwell.
+
+#### Why decode is the limiting factor
+
+For a dense transformer, generating one token requires loading every parameter from memory once (modulo cache effects, which are small relative to model size). The relationship is:
+
+```
+decode_throughput  ≈  effective_memory_bandwidth  /  model_size_in_bytes
+```
+
+For Gemma 4 31B NVFP4 (17.97 GiB) on GB10 (~273 GB/s):
+
+```
+ceiling  ≈  273 GB/s / 17.97 GiB  ≈  15.2 tokens/s
+measured ≈  11.56 tokens/s        ≈  76% of ceiling
+```
+
+This is why **MoE models** (e.g. Qwen3 30B-A3B) deliver an order of magnitude more decode throughput on the same hardware: only a fraction of the parameters is touched per token, so the effective model size that bandwidth has to serve is much smaller.
+
+### Reproduce on your hardware
+
+A wrapper script is provided that runs the benchmark with sane defaults and saves the output:
+
+```bash
+./scripts/bench.sh /models/your-model/your-model.gguf
+```
+
+Output is appended to `bench-results.md` in the repo root, so you can build a comparison table over time as you try different models or quantizations. PRs adding benchmark rows for other models or other GB10-class hardware are welcome.
+
+### Raw output
+
+<details>
+<summary>Click to expand the unedited <code>llama-bench</code> output</summary>
+
+```
+ggml_cuda_init: found 1 CUDA devices (Total VRAM: 124610 MiB):
+  Device 0: NVIDIA GB10, compute capability 12.1, VMM: yes, VRAM: 124610 MiB
+| model                          |       size |     params | backend    | ngl |            test |                  t/s |
+| ------------------------------ | ---------: | ---------: | ---------- | --: | --------------: | -------------------: |
+| gemma4 31B NVFP4               |  17.97 GiB |    30.70 B | CUDA       | 100 |           pp512 |        542.92 ± 2.27 |
+| gemma4 31B NVFP4               |  17.97 GiB |    30.70 B | CUDA       | 100 |           tg128 |         11.56 ± 0.00 |
+build: 550d684bd (8902)
+```
+
+</details>
 
 ---
 
@@ -557,6 +649,7 @@ dgxspark-llm-repo/
 ├── scripts/
 │   ├── install.sh                     # toolchain check + llama.cpp build
 │   ├── run.sh                         # foreground launcher
+│   ├── bench.sh                       # llama-bench wrapper, appends to bench-results.md
 │   └── download-model.sh              # Hugging Face download helper
 ├── systemd/
 │   ├── llama-server.service           # unit file
