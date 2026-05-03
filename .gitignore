@@ -1,0 +1,38 @@
+# Build artifacts (in case anyone vendors llama.cpp into the repo)
+build/
+build-*/
+*.o
+*.so
+*.dylib
+
+# Local model checkpoints (never commit weights)
+models/
+*.gguf
+*.safetensors
+*.bin
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.python-version
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Local environment overrides
+.env
+.env.local
+*.local
+
+# Logs
+*.log
+journal/

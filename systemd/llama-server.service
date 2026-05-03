@@ -1,22 +1,85 @@
+################################################################################
+# llama-server.service
+#
+# systemd unit for serving a local LLM via llama.cpp on NVIDIA DGX Spark (GB10).
+#
+# Install:
+#     sudo cp llama-server.service /etc/systemd/system/
+#     sudo cp llama-server.env     /etc/llama-server.env
+#     sudo systemctl daemon-reload
+#     sudo systemctl enable --now llama-server
+#
+# Configuration is loaded from /etc/llama-server.env so this unit file does not
+# need to be edited when changing model, port, or flags.
+################################################################################
+
 [Unit]
-Description=LLama.cpp Server (Gemma 31B)
+Description=llama.cpp inference server (DGX Spark, GB10, CUDA 13)
+Documentation=https://github.com/engineering87/dgxspark-llm-repo
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-User=dgxspark
-WorkingDirectory=/home/dgxspark/llama.cpp
+Type=simple
 
-ExecStart=/home/dgxspark/llama.cpp/build/bin/llama-server \
-  -m /models/gemma-4-31B-it-NVFP4-turbo/gemma-4-31B-it-NVFP4-turbo-NVFP4.gguf \
-  -c 8192 \
-  --n-gpu-layers 100 \
-  --host 0.0.0.0 \
-  --port 8080
+# --- Identity -----------------------------------------------------------------
+# Run as a dedicated unprivileged user. Create it once with:
+#     sudo useradd --system --no-create-home --shell /usr/sbin/nologin llama
+# If you prefer to run as your own user, replace "llama" below.
+User=llama
+Group=llama
 
-Restart=always
-RestartSec=5
-Environment=CUDA_VISIBLE_DEVICES=0
+# --- Working directory and binaries -------------------------------------------
+WorkingDirectory=/opt/llama.cpp
+EnvironmentFile=/etc/llama-server.env
+
+ExecStart=/opt/llama.cpp/build/bin/llama-server \
+    --model        ${MODEL_PATH} \
+    --ctx-size     ${CTX_SIZE} \
+    --n-gpu-layers ${N_GPU_LAYERS} \
+    --host         ${HOST} \
+    --port         ${PORT} \
+    --threads      ${THREADS} \
+    --parallel     ${PARALLEL} \
+    --batch-size   ${BATCH_SIZE} \
+    --ubatch-size  ${UBATCH_SIZE} \
+    --flash-attn \
+    --metrics
+
+# --- Lifecycle ----------------------------------------------------------------
+Restart=on-failure
+RestartSec=10s
+TimeoutStartSec=300
+TimeoutStopSec=30
+KillSignal=SIGINT
+
+# --- Resources ----------------------------------------------------------------
+LimitNOFILE=65536
+LimitMEMLOCK=infinity
+
+# --- Hardening ----------------------------------------------------------------
+# Trim unnecessary kernel surface area. Adjust if you need more access.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=false   # CUDA JIT requires writable+executable pages
+SystemCallArchitectures=native
+
+# Allow read access to the model directory and write to a runtime dir.
+ReadWritePaths=/var/lib/llama-server
+ReadOnlyPaths=/models /opt/llama.cpp
+
+# --- Logging ------------------------------------------------------------------
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=llama-server
 
 [Install]
 WantedBy=multi-user.target
